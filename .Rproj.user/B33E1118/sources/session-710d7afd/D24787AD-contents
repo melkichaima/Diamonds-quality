@@ -1,0 +1,245 @@
+---
+title: "Diamonds quality"
+author: ""
+date: ""
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(modelr)
+```
+
+# The challenge
+
+In this data challenge we explore the qualities of diamonds and their
+association with price using the `ggplot2::diamonds` dataset. Recall
+that, for the three quality variables:
+
+- best **cut** is Ideal, worst is Fair
+- best **color** is D, worst is J
+- best **clarity** is IF, worst is I1
+
+The task has two parts:
+
+1. Observe that low quality diamonds (with respect to cut, color and
+   clarity) are, on average, *more* expensive.
+2. Use models to explain this apparent paradox, and resolve it.
+
+```{r}
+diamonds
+```
+
+# Part 1: observing the paradox
+
+If diamonds were priced purely according to quality, we would expect
+better-cut, better-color, and better-clarity stones to command higher
+prices. Let's check that directly.
+
+## Price by cut
+
+```{r}
+ggplot(diamonds, aes(cut, price)) +
+  geom_boxplot() +
+  labs(title = "Price by cut",
+       x = "Cut (worst → best)",
+       y = "Price (US$)")
+```
+
+Counter-intuitively, **Fair** cut diamonds (the worst cut) have a
+*higher* median price than **Ideal** cut diamonds (the best cut).
+
+## Price by color
+
+```{r}
+ggplot(diamonds, aes(color, price)) +
+  geom_boxplot() +
+  labs(title = "Price by color",
+       x = "Color (best = D → worst = J)",
+       y = "Price (US$)")
+```
+
+The same pattern shows up here: color **J** (the worst color) tends to
+be priced higher than color **D** (the best color).
+
+## Price by clarity
+
+```{r}
+ggplot(diamonds, aes(clarity, price)) +
+  geom_boxplot() +
+  labs(title = "Price by clarity",
+       x = "Clarity (worst → best)",
+       y = "Price (US$)")
+```
+
+Again, **I1** (the worst clarity grade) diamonds tend to be priced
+higher than **IF** (the best clarity grade) diamonds.
+
+So on all three quality dimensions, the raw data seem to say "worse
+quality, higher price" — which is the paradox we need to explain.
+
+# Part 2: explaining and resolving the paradox
+
+## The missing variable: carat
+
+The quality grades are not the only thing that varies across diamonds
+— size (`carat`) varies enormously too, and size is well known to be
+the single biggest driver of a diamond's price. If low-quality
+diamonds in this dataset tend to also be *larger* diamonds, that alone
+could outweigh the quality discount and make them look more expensive
+on average. Let's check whether carat and quality are related.
+
+```{r}
+ggplot(diamonds, aes(cut, carat)) +
+  geom_boxplot() +
+  labs(title = "Carat by cut",
+       x = "Cut (worst → best)",
+       y = "Carat")
+```
+
+This confirms the suspicion: **Fair** cut diamonds are, on average,
+noticeably larger (higher carat) than **Ideal** cut diamonds. This
+makes sense once you think about how diamonds are cut in practice —
+it is much harder to cut a large, valuable rough stone into a
+perfect "Ideal" shape without losing carat weight, so cutters more
+often compromise on cut quality for big stones to preserve size, while
+small stones can be cut ideally with little to lose. The same kind of
+relationship holds, to varying degrees, between carat and color, and
+between carat and clarity.
+
+So `carat` is a **confounding variable**: it is correlated both with
+the quality grades (worse quality tends to coincide with bigger
+stones) and, much more strongly, with price. A simple comparison of
+price across quality groups, without accounting for carat, mixes the
+(small, negative) effect of quality with the (large, positive) effect
+of size — and size wins.
+
+## Modeling price as a function of carat
+
+To separate the size effect from the quality effect, we first model
+how much of `price` is explained by `carat` alone, then look at what's
+*left over* (the residuals) once carat has been accounted for.
+
+Price and carat are both strongly right-skewed, and their relationship
+is multiplicative rather than additive (a diamond's value scales
+roughly with a power of its weight), so we work on the log scale,
+where the relationship becomes close to linear:
+
+```{r}
+ggplot(diamonds, aes(carat, price)) +
+  geom_point(alpha = 1/50) +
+  labs(title = "Price vs carat (raw scale)")
+
+ggplot(diamonds, aes(log2(carat), log2(price))) +
+  geom_point(alpha = 1/50) +
+  labs(title = "log2(price) vs log2(carat)")
+```
+
+The log-log relationship is indeed much closer to linear, so we fit
+a simple linear model of `log2(price)` on `log2(carat)`:
+
+```{r}
+diamonds2 <- diamonds %>%
+  mutate(
+    lprice = log2(price),
+    lcarat = log2(carat)
+  )
+
+mod_carat <- lm(lprice ~ lcarat, data = diamonds2)
+
+summary(mod_carat)
+```
+
+The fit is extremely strong (carat alone explains the large majority
+of the variation in log price), confirming that size is indeed the
+dominant driver of price.
+
+## Residuals: what's left after removing the size effect
+
+We now add the residuals from this model back onto the data. A
+positive residual means a diamond is *more expensive than its carat
+alone would predict*; a negative residual means it is *cheaper than
+its carat alone would predict*. In other words, the residual is a
+size-adjusted measure of value.
+
+```{r}
+diamonds2 <- diamonds2 %>%
+  add_residuals(mod_carat, "lresid")
+
+ggplot(diamonds2, aes(lcarat, lresid)) +
+  geom_point(alpha = 1/50) +
+  labs(title = "Residuals of log2(price) ~ log2(carat)")
+```
+
+With the dominant carat effect removed, we can now ask the original
+question again, but this time about the *residual*, size-adjusted
+price, rather than the raw price.
+
+### Residuals by cut
+
+```{r}
+ggplot(diamonds2, aes(cut, lresid)) +
+  geom_boxplot() +
+  labs(title = "Size-adjusted price (residual) by cut",
+       x = "Cut (worst → best)",
+       y = "Residual of log2(price) ~ log2(carat)")
+```
+
+### Residuals by color
+
+```{r}
+ggplot(diamonds2, aes(color, lresid)) +
+  geom_boxplot() +
+  labs(title = "Size-adjusted price (residual) by color",
+       x = "Color (best = D → worst = J)",
+       y = "Residual of log2(price) ~ log2(carat)")
+```
+
+### Residuals by clarity
+
+```{r}
+ggplot(diamonds2, aes(clarity, lresid)) +
+  geom_boxplot() +
+  labs(title = "Size-adjusted price (residual) by clarity",
+       x = "Clarity (worst → best)",
+       y = "Residual of log2(price) ~ log2(carat)")
+```
+
+The paradox disappears. Once we control for carat, the residuals now
+behave exactly as intuition expects:
+
+- Better **cut** diamonds have higher residuals than worse-cut ones.
+- Better **color** diamonds have higher residuals than worse-color
+  ones.
+- Better **clarity** diamonds have higher residuals than worse-clarity
+  ones.
+
+That is, *for a given size*, higher quality does command a higher
+price, it was only being masked, in the raw unadjusted comparison, by
+the much larger effect of carat varying systematically (and inversely)
+with quality.
+
+# Conclusion
+
+The apparent paradox — lower quality diamonds appearing more expensive
+, is a case of **confounding**, not a genuine quality discount for
+better diamonds. `carat` (size) drives the overwhelming majority of a
+diamond's price, and in this dataset lower-quality stones tend to be
+larger stones, because large rough diamonds are harder to cut to a
+flawless standard without sacrificing carat weight. When we compare
+raw prices across quality groups we are implicitly comparing diamonds
+of very different average sizes, so the (large) size effect swamps the
+(smaller) quality effect and reverses its apparent direction.
+
+By fitting a model of `log2(price)` on `log2(carat)` and examining the
+**residuals**,  the size-adjusted price, rather than raw price, we
+isolate the quality effect from the size effect. Once this confounder
+is controlled for, the data show exactly what we'd expect: better cut,
+better color, and better clarity are each associated with a higher
+size-adjusted price. The paradox was in the raw comparison, not in how
+diamonds are actually valued.
